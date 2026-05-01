@@ -118,5 +118,14 @@ def run_chat():
         print(f"\nAgent: {response.content}\n")
 
 
+def chat_turn(chain, save_history_to_disk, session_id: str, user_input: str) -> str:
+    response = chain.invoke(
+        {"input": user_input},
+        config={"configurable": {"session_id": session_id}},
+    )
+    save_history_to_disk(session_id)
+    return response.content
+
+
 if __name__ == "__main__":
     run_chat()

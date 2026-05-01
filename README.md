@@ -60,6 +60,27 @@ python agent.py
 
 Then ask questions in the terminal. Type `exit` to quit.
 
+## 7) Run the web app
+
+Install dependencies first (includes Flask):
+
+```bash
+pip install -r requirements.txt
+```
+
+Start the web app:
+
+```bash
+python web_app.py
+```
+
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000) in your browser.
+
+Session behavior in web UI:
+- Leave session ID empty to start a new session automatically.
+- Enter an existing session ID to continue that conversation.
+- Session history is saved in `sessions/<session_id>.json`.
+
 ---
 
 ## What each file does

@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RD Chat Agent</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        background: #f5f7fb;
+        color: #17202a;
+      }
+      .app {
+        max-width: 900px;
+        margin: 24px auto;
+        padding: 16px;
+      }
+      .card {
+        background: #ffffff;
+        border-radius: 12px;
+        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+        padding: 16px;
+      }
+      h1 {
+        margin-top: 0;
+        font-size: 24px;
+      }
+      .session-row {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      input[type="text"],
+      select {
+        flex: 1;
+        padding: 10px;
+        border-radius: 8px;
+        border: 1px solid #cbd5e1;
+        font-size: 14px;
+      }
+      button {
+        border: none;
+        background: #2563eb;
+        color: white;
+        border-radius: 8px;
+        padding: 10px 14px;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #1d4ed8;
+      }
+      #messages {
+        min-height: 380px;
+        max-height: 60vh;
+        overflow-y: auto;
+        padding: 12px;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        background: #fbfdff;
+      }
+      .msg {
+        margin-bottom: 10px;
+        padding: 10px;
+        border-radius: 8px;
+        white-space: pre-wrap;
+      }
+      .user {
+        background: #dbeafe;
+      }
+      .agent {
+        background: #e2e8f0;
+      }
+      .loading {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .spinner {
+        width: 14px;
+        height: 14px;
+        border: 2px solid #94a3b8;
+        border-top-color: #2563eb;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .composer {
+        display: flex;
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .hint {
+        margin-top: 8px;
+        font-size: 12px;
+        color: #475569;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <div class="card">
+        <h1>RD Chat Agent</h1>
+        <div class="session-row">
+          <select id="session-select"></select>
+          <input id="session-tag" type="text" placeholder="New session tag name" />
+          <button id="new-session">Create Session</button>
+        </div>
+        <div id="messages"></div>
+        <div class="composer">
+          <input id="prompt" type="text" placeholder="Ask something..." />
+          <button id="send">Send</button>
+        </div>
+        <div class="hint">
+          Current session: <span id="session-display">not set</span>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const sessionSelect = document.getElementById("session-select");
+      const sessionTagInput = document.getElementById("session-tag");
+      const sessionDisplay = document.getElementById("session-display");
+      const promptInput = document.getElementById("prompt");
+      const messages = document.getElementById("messages");
+      const sendBtn = document.getElementById("send");
+      const newSessionBtn = document.getElementById("new-session");
+      let pendingTag = "";
+
+      function appendMessage(role, text) {
+        const div = document.createElement("div");
+        div.className = `msg ${role}`;
+        div.textContent = text;
+        messages.appendChild(div);
+        messages.scrollTop = messages.scrollHeight;
+      }
+
+      function appendLoadingMessage() {
+        const div = document.createElement("div");
+        div.className = "msg agent";
+        div.innerHTML = '<span class="loading"><span class="spinner"></span>Agent is thinking...</span>';
+        messages.appendChild(div);
+        messages.scrollTop = messages.scrollHeight;
+        return div;
+      }
+
+      function clearMessages() {
+        messages.innerHTML = "";
+      }
+
+      function selectedSessionId() {
+        return sessionSelect.value || "";
+      }
+
+      function selectedSessionLabel() {
+        const option = sessionSelect.options[sessionSelect.selectedIndex];
+        return option ? option.textContent : "not set";
+      }
+
+      function setSessionDisplay() {
+        sessionDisplay.textContent = selectedSessionLabel();
+      }
+
+      function upsertSessionOption(sessionId, tag, shouldSelect = true) {
+        if (!sessionId) return;
+        const label = `${tag || "Session"} (${sessionId.slice(0, 8)})`;
+        const existing = Array.from(sessionSelect.options).find((opt) => opt.value === sessionId);
+        if (existing) {
+          existing.textContent = label;
+          if (shouldSelect) sessionSelect.value = sessionId;
+        } else {
+          const option = document.createElement("option");
+          option.value = sessionId;
+          option.textContent = label;
+          sessionSelect.appendChild(option);
+          if (shouldSelect) sessionSelect.value = sessionId;
+        }
+        setSessionDisplay();
+      }
+
+      async function loadSessions() {
+        sessionSelect.innerHTML = "";
+        const placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = "New unsaved session";
+        sessionSelect.appendChild(placeholder);
+
+        try {
+          const response = await fetch("/api/sessions");
+          const data = await response.json();
+          const sessions = data.sessions || [];
+          sessions.forEach((item) => {
+            upsertSessionOption(item.session_id, item.tag, false);
+          });
+          if (!sessions.length) sessionSelect.value = "";
+        } catch (err) {
+          appendMessage("agent", `Error loading sessions: ${err}`);
+        }
+
+        setSessionDisplay();
+      }
+
+      async function loadSessionHistory(sessionId) {
+        clearMessages();
+        if (!sessionId) {
+          appendMessage("agent", "No session selected yet. Start chatting to create one.");
+          return;
+        }
+
+        try {
+          const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/history`);
+          const data = await response.json();
+          const history = data.history || [];
+
+          if (!history.length) {
+            appendMessage("agent", "No saved history in this session yet.");
+            return;
+          }
+
+          history.forEach((item) => {
+            if (item.type === "human") {
+              appendMessage("user", `You: ${item.content}`);
+            } else if (item.type === "ai") {
+              appendMessage("agent", `Agent: ${item.content}`);
+            }
+          });
+        } catch (err) {
+          appendMessage("agent", `Error loading chat history: ${err}`);
+        }
+      }
+
+      async function sendMessage() {
+        const message = promptInput.value.trim();
+        if (!message) return;
+
+        appendMessage("user", `You: ${message}`);
+        promptInput.value = "";
+        sendBtn.disabled = true;
+        promptInput.disabled = true;
+        const loadingEl = appendLoadingMessage();
+
+        try {
+          const response = await fetch("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              message,
+              session_id: selectedSessionId(),
+              tag: pendingTag,
+            }),
+          });
+          const data = await response.json();
+          if (!response.ok) {
+            loadingEl.remove();
+            appendMessage("agent", `Error: ${data.error || "Unknown error"}`);
+            return;
+          }
+
+          if (data.session_id) upsertSessionOption(data.session_id, data.tag);
+          pendingTag = "";
+          sessionTagInput.value = "";
+          loadingEl.remove();
+          appendMessage("agent", `Agent: ${data.answer}`);
+        } catch (err) {
+          loadingEl.remove();
+          appendMessage("agent", `Error: ${err}`);
+        } finally {
+          sendBtn.disabled = false;
+          promptInput.disabled = false;
+          promptInput.focus();
+        }
+      }
+
+      sendBtn.addEventListener("click", sendMessage);
+      promptInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") sendMessage();
+      });
+
+      newSessionBtn.addEventListener("click", () => {
+        const tag = sessionTagInput.value.trim();
+        pendingTag = tag || "New Session";
+        sessionSelect.value = "";
+        setSessionDisplay();
+        appendMessage(
+          "agent",
+          `Prepared new session "${pendingTag}". Send a message to start it.`
+        );
+      });
+
+      sessionSelect.addEventListener("change", () => {
+        pendingTag = "";
+        setSessionDisplay();
+        loadSessionHistory(selectedSessionId());
+      });
+
+      loadSessions().then(() => {
+        loadSessionHistory(selectedSessionId());
+      });
+    </script>
+  </body>
+</html>
